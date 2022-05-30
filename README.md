@@ -1,4 +1,4 @@
-# s
+# aks-labs-netio
 This is a set of scripts and tools use to generate a docker image that will have the aks-labs-netio binary used to evaluate your AKS troubleshooting skills.
 
 It uses the shc_script_converter.sh (build using the following tool https://github.com/neurobin/shc) to abstract the lab scripts on binary format and then the use the Dockerfile to pack everyting on a Ubuntu container with az cli and kubectl.
