@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # script name: aks-labs-netio.sh
-# Version v0.0.1 20220530
+# Version v0.0.2 20220530
 # Set of tools to deploy AKS troubleshooting labs
 
 # "-l|--lab" Lab scenario to deploy
@@ -58,7 +58,7 @@ done
 # Variable definition
 SCRIPT_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
 SCRIPT_NAME="$(echo $0 | sed 's|\.\/||g')"
-SCRIPT_VERSION="Version v0.0.1 20220530"
+SCRIPT_VERSION="Version v0.0.2 20220530"
 
 # Funtion definition
 
@@ -113,9 +113,9 @@ function print_usage_text () {
     echo -e "$NAME_EXEC usage: $NAME_EXEC -l <LAB#> -u <USER_ALIAS> [-v|--validate] [-r|--region] [-h|--help] [--version]\n"
     echo -e "\nHere is the list of current labs available:\n
 *************************************************************************************
-*\t 1. Website hosted on AKS not reachable over public IP
-*\t 2. Firewall issue
-*\t 3. Netpol issue
+*\t 1. Website hosted on AKS not reachable over public IP (NSG)
+*\t 2. Website hosted on AKS not reachable over public IP (netpol issue)
+*\t 3. Firewall issue
 *************************************************************************************\n"
 }
 
@@ -142,6 +142,8 @@ function lab_scenario_1 () {
     --vnet-name $VNET_NAME \
     --query [].id --output tsv)
 
+    az network nsg create -g $RESOURCE_GROUP -n $NSG_NAME -o table &>/dev/null
+
     az network nsg rule create -g $RESOURCE_GROUP --nsg-name $NSG_NAME \
     -n SecRule1  --priority 200 \
     --source-address-prefixes VirtualNetwork \
@@ -150,13 +152,15 @@ function lab_scenario_1 () {
     --direction Inbound \
     --access Deny \
     --protocol '*' \
-    --description "Security test" &>/dev/null
+    --description "Security test" \
+    -o table &>/dev/null
 
     az network vnet subnet update \
     --resource-group $RESOURCE_GROUP \
     --vnet-name $VNET_NAME \
     --name $SUBNET_NAME \
-    --network-security-group $NSG_NAME
+    --network-security-group $NSG_NAME \
+    -o table &>/dev/null
 
     az aks create \
     --resource-group $RESOURCE_GROUP \
@@ -177,7 +181,7 @@ function lab_scenario_1 () {
 
     az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
 
-cat <<EOF | kubectl apply -f -
+cat <<EOF | kubectl apply -f &>/dev/null -
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -238,6 +242,7 @@ function lab_scenario_1_validation () {
     then
         az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
         CLUSTER_RESOURCE_GROUP=$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query nodeResourceGroup -o tsv)
+        WEB_IP="$(kubectl get svc aks-helloworld-one-pub | grep -v '^NAME' | awk '{print $4}')"
         WEB_STATUS="$(curl -m 5 -s -o /dev/null -w "%{http_code}" http://$WEB_IP)"
         if [ "$WEB_STATUS" -eq "200" ]
         then
@@ -259,8 +264,6 @@ function lab_scenario_2 () {
     check_resourcegroup_cluster $RESOURCE_GROUP $CLUSTER_NAME
     VNET_NAME=aks-vnet-ex2
     SUBNET_NAME=aks-subnet-ex2
-    UDR_NAME=security-routes
-    check_resourcegroup_cluster $RESOURCE_GROUP $CLUSTER_NAME
 
     az network vnet create \
     --resource-group $RESOURCE_GROUP \
@@ -275,21 +278,17 @@ function lab_scenario_2 () {
     --vnet-name $VNET_NAME \
     --query [].id --output tsv)
 
-    az network route-table create -g $RESOURCE_GROUP --name $UDR_NAME -o table
-    az network route-table route create -g $RESOURCE_GROUP --route-table-name $UDR_NAME -n main-route \
-    --next-hop-type VirtualAppliance --address-prefix 0.0.0.0/0 --next-hop-ip-address 10.0.0.1 -o table &>/dev/null
-    az network vnet subnet update -g $RESOURCE_GROUP -n $SUBNET_NAME --vnet-name $VNET_NAME --route-table $UDR_NAME -o table
-
     echo -e "\n--> Deploying cluster for lab${LAB_SCENARIO}...\n"
     az aks create \
     --resource-group $RESOURCE_GROUP \
     --name $CLUSTER_NAME \
     --location $LOCATION \
-    --node-count 1 \
-    --network-plugin azure \
+    --node-count 2 \
+    --network-plugin kubenet \
     --service-cidr 10.0.0.0/16 \
     --dns-service-ip 10.0.0.10 \
     --docker-bridge-address 172.17.0.1/16 \
+    --network-policy calico \
     --vnet-subnet-id $SUBNET_ID \
     --generate-ssh-keys \
     --tag aks-net-lab=${LAB_SCENARIO} \
@@ -298,10 +297,112 @@ function lab_scenario_2 () {
 
     validate_cluster_exists $RESOURCE_GROUP $CLUSTER_NAME
     
+    az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
+
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx && \
+helm repo update && \
+helm install nginx-ingress ingress-nginx/ingress-nginx \
+    --namespace ingress-basic --create-namespace \
+    --set controller.replicaCount=1 \
+    --set controller.nodeSelector."kubernetes\.io/os"=linux \
+    --set controller.admissionWebhooks.patch.nodeSelector."kubernetes\.io/os"=linux \
+    --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/ \
+    --set defaultBackend.nodeSelector."kubernetes\.io/os"=linux 
+
+kubectl create ns website &>/dev/null
+kubectl label ns website role=ingress-basic &>/dev/null
+
+cat <<EOF | kubectl -n website apply -f &>/dev/null -	
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aks-helloworld-one  
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aks-helloworld-one
+  template:
+    metadata:
+      labels:
+        app: aks-helloworld-one
+    spec:
+      containers:
+      - name: aks-helloworld-one
+        image: mcr.microsoft.com/azuredocs/aks-helloworld:v1
+        ports:
+        - containerPort: 80
+        env:
+        - name: TITLE
+          value: "Welcome to Azure Kubernetes Service (AKS)"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aks-helloworld-one  
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+  selector:
+    app: aks-helloworld-one
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hello-world-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: aks-helloworld-one
+            port:
+              number: 80
+EOF
+
+cat <<EOF | kubectl -n website apply -f &>/dev/null -	
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: backend-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: aks-helloworld-one
+  ingress:
+  - ports:
+    - port: 80
+    from:
+    - namespaceSelector:
+          matchLabels:
+            role: ingress-basic
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: controller
+          app.kubernetes.io/instance: nginx-ingress
+---	
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: default-deny-all
+  namespace: website
+spec:
+  podSelector: {}
+  ingress: []
+EOF
+
     MC_RESOURCE_GROUP=$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query nodeResourceGroup -o tsv)
     CLUSTER_URI="$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query id -o tsv)"
+    WEB_IP="$(kubectl -n ingress-basic get svc nginx-ingress-ingress-nginx-controller | grep -v '^NAME' | awk '{print $4}')"
     echo -e "\n\n********************************************************"
-    echo -e "\n--> Issue description: \nNew cluster deployment fails with \"vmssCSE failed: connect to mcr.microsoft.com port 443 (tcp) failed: Connection timed out\" \nAnd there are no nodes in the cluster from Kubernetes perspective\n"
+    echo -e "\n--> Issue description: \n Website hosted on AKS cluster with public IP $WEB_IP is not reachable...\n"
     echo -e "Cluster uri == ${CLUSTER_URI}\n"
 }
 
@@ -321,11 +422,12 @@ function lab_scenario_2_validation () {
     then
         az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
         CLUSTER_RESOURCE_GROUP=$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query nodeResourceGroup -o tsv)
-        GET_NODES="$(kubectl get no 2>&1)"
-        if [ "$GET_NODES" != "No resources found" ]
+        WEB_IP="$(kubectl -n ingress-basic get svc nginx-ingress-ingress-nginx-controller | grep -v '^NAME' | awk '{print $4}')"
+        WEB_STATUS="$(curl -m 5 -s -o /dev/null -w "%{http_code}" http://$WEB_IP)"
+        if [ "$WEB_STATUS" -eq "200" ]
         then
             echo -e "\n\n========================================================"
-            echo -e "\nThe cluster nodes outbound looks good now\n"
+            echo -e "\nThe website hosted on $WEB_IP is reachable\n"
         else
             echo -e "\nScenario $LAB_SCENARIO is still FAILED\n"
         fi
@@ -357,7 +459,7 @@ function lab_scenario_3 () {
     echo -e "\n\n--> Please wait while we are preparing the environment for you to troubleshoot...\n"
     az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
 
-cat <<EOF | kubectl apply -f -
+cat <<EOF | kubectl apply -f &>/dev/null -
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -478,7 +580,6 @@ az_login_check
 
 if [ $LAB_SCENARIO -eq 1 ] && [ $VALIDATE -eq 0 ]
 then
-    check_resourcegroup_cluster
     lab_scenario_1
 
 elif [ $LAB_SCENARIO -eq 1 ] && [ $VALIDATE -eq 1 ]
@@ -487,7 +588,6 @@ then
 
 elif [ $LAB_SCENARIO -eq 2 ] && [ $VALIDATE -eq 0 ]
 then
-    check_resourcegroup_cluster
     lab_scenario_2
 
 elif [ $LAB_SCENARIO -eq 2 ] && [ $VALIDATE -eq 1 ]
@@ -496,7 +596,6 @@ then
 
 elif [ $LAB_SCENARIO -eq 3 ] && [ $VALIDATE -eq 0 ]
 then
-    check_resourcegroup_cluster
     lab_scenario_3
 
 elif [ $LAB_SCENARIO -eq 3 ] && [ $VALIDATE -eq 1 ]

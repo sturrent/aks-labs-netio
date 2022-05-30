@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install bash-completion apt-transport-https gnupg 
     && apt-get update && apt-get install -y kubectl azure-cli \
     && apt-get clean all
 
+RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
 COPY ./bashrc /root/.bashrc
 
 COPY ./akslabs_binaries/* /usr/local/bin/
