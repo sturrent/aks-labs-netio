@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # script name: aks-labs-netio.sh
-# Version v0.0.3 20220530
+# Version v0.0.4 20220530
 # Set of tools to deploy AKS troubleshooting labs
 
 # "-l|--lab" Lab scenario to deploy
@@ -58,7 +58,7 @@ done
 # Variable definition
 SCRIPT_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
 SCRIPT_NAME="$(echo $0 | sed 's|\.\/||g')"
-SCRIPT_VERSION="Version v0.0.3 20220530"
+SCRIPT_VERSION="Version v0.0.4 20220530"
 
 # Funtion definition
 
@@ -115,7 +115,7 @@ function print_usage_text () {
 *************************************************************************************
 *\t 1. Website hosted on AKS not reachable over public IP (NSG)
 *\t 2. Website hosted on AKS not reachable over public IP (netpol issue)
-*\t 3. Firewall issue
+*\t 3. WIP - Firewall issue (not ready yet)
 *************************************************************************************\n"
 }
 
@@ -178,8 +178,10 @@ function lab_scenario_1 () {
     -o table
 
     validate_cluster_exists $RESOURCE_GROUP $CLUSTER_NAME
-
+    
+    echo -e "\n\n--> Please wait while we prepar the lab environment for you...\n"
     az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
+    while true; do for s in / - \\ \|; do printf "\r$s"; sleep 1; done; done & # spinner
 
 cat <<EOF | kubectl apply -f &>/dev/null -
 apiVersion: apps/v1
@@ -217,10 +219,10 @@ spec:
     app: aks-helloworld-one
 EOF
 
-    echo -e "\n\n--> Please wait while we prepar the lab environment for you...\n"
     sleep 60
     CLUSTER_URI="$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query id -o tsv)"
     WEB_IP="$(kubectl get svc aks-helloworld-one-pub | grep -v '^NAME' | awk '{print $4}')"
+    kill $!; trap 'kill $!' SIGTERM # kill the spinner
     echo -e "\n************************************************************************\n"
     echo -e "\n--> Issue description: \n Website hosted on AKS cluster with public IP $WEB_IP is not reachable...\n"
     echo -e "Cluster uri == ${CLUSTER_URI}\n"
@@ -249,7 +251,7 @@ function lab_scenario_1_validation () {
             echo -e "\n\n========================================================"
             echo -e "\nThe website hosted on $WEB_IP is reachable\n"
         else
-            echo -e "\nScenario $LAB_SCENARIO is still FAILED\n"
+            echo -e "\nScenario $LAB_SCENARIO is still FAILED, the website hosted on $WEB_IP is not reachable\n"
         fi
     else
         echo -e "\n--> Error: Cluster $CLUSTER_NAME in resource group $RESOURCE_GROUP was not created with this tool for lab $LAB_SCENARIO and cannot be validated...\n"
@@ -298,6 +300,7 @@ function lab_scenario_2 () {
     validate_cluster_exists $RESOURCE_GROUP $CLUSTER_NAME
     
     echo -e "\n\n--> Please wait while we prepar the lab environment for you...\n"
+    while true; do for s in / - \\ \|; do printf "\r$s"; sleep 1; done; done & # spinner
     az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
 
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx &>/dev/null
@@ -407,6 +410,7 @@ EOF
     MC_RESOURCE_GROUP=$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query nodeResourceGroup -o tsv)
     CLUSTER_URI="$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query id -o tsv)"
     WEB_IP="$(kubectl -n ingress-basic get svc nginx-ingress-ingress-nginx-controller | grep -v '^NAME' | awk '{print $4}')"
+    kill $!; trap 'kill $!' SIGTERM # kill the spinner
     echo -e "\n\n********************************************************"
     echo -e "\n--> Issue description: \n Website hosted on AKS cluster with public IP $WEB_IP is not reachable...\n"
     echo -e "Cluster uri == ${CLUSTER_URI}\n"
@@ -450,61 +454,16 @@ function lab_scenario_3 () {
     check_resourcegroup_cluster $RESOURCE_GROUP $CLUSTER_NAME
     
     echo -e "\n--> Deploying cluster for lab${LAB_SCENARIO}...\n"
-    az aks create \
-    --resource-group $RESOURCE_GROUP \
-    --name $CLUSTER_NAME \
-    --location $LOCATION \
-    --node-count 1 \
-    --generate-ssh-keys \
-    --tag aks-net-lab=${LAB_SCENARIO} \
-	--yes \
-    -o table
+    
 
     validate_cluster_exists $RESOURCE_GROUP $CLUSTER_NAME
 
     echo -e "\n\n--> Please wait while we are preparing the environment for you to troubleshoot...\n"
     az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
 
-cat <<EOF | kubectl apply -f &>/dev/null -
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aks-helloworld-one  
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: aks-helloworld-one
-  template:
-    metadata:
-      labels:
-        app: aks-helloworld-one
-    spec:
-      containers:
-      - name: aks-helloworld-one
-        image: mcr.microsoft.com/azuredocs/aks-helloworld:v1
-        ports:
-        - containerPort: 88
-        env:
-        - name: TITLE
-          value: "Welcome to Azure Kubernetes Service (AKS)"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: aks-helloworld-one  
-spec:
-  type: LoadBalancer
-  ports:
-  - port: 80
-    targetPort: 88
-  selector:
-    app: aks-helloworld-one
-EOF
-
     CLUSTER_URI="$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query id -o tsv)"
     echo -e "\n\n********************************************************"
-    echo -e "\n--> Issue description: \nCluster has a web application \"aks-helloworld-one\" exposed with service type LoadBalancer that is currently not reachable...\n"
+    echo -e "\n--> Issue description: \n...firewall...\n"
     echo -e "\nCluster uri == ${CLUSTER_URI}\n"
 }
 
@@ -568,9 +527,9 @@ if [ -z $USER_ALIAS ]; then
 fi
 
 # lab scenario has a valid option
-if [[ ! $LAB_SCENARIO =~ ^[1-3]+$ ]];
+if [[ ! $LAB_SCENARIO =~ ^[1-2]+$ ]];
 then
-    echo -e "\n--> Error: invalid value for lab scenario '-l $LAB_SCENARIO'\nIt must be value from 1 to 3\n"
+    echo -e "\n--> Error: invalid value for lab scenario '-l $LAB_SCENARIO'\nIt must be value from 1 to 2\n"
     exit 11
 fi
 
