@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # script name: aks-labs-netio.sh
-# Version v0.0.2 20220530
+# Version v0.0.3 20220530
 # Set of tools to deploy AKS troubleshooting labs
 
 # "-l|--lab" Lab scenario to deploy
@@ -58,7 +58,7 @@ done
 # Variable definition
 SCRIPT_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
 SCRIPT_NAME="$(echo $0 | sed 's|\.\/||g')"
-SCRIPT_VERSION="Version v0.0.2 20220530"
+SCRIPT_VERSION="Version v0.0.3 20220530"
 
 # Funtion definition
 
@@ -217,7 +217,7 @@ spec:
     app: aks-helloworld-one
 EOF
 
-    echo -e "\n\n--> Please wait while we are preparing the environment for you to troubleshoot...\n"
+    echo -e "\n\n--> Please wait while we prepar the lab environment for you...\n"
     sleep 60
     CLUSTER_URI="$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query id -o tsv)"
     WEB_IP="$(kubectl get svc aks-helloworld-one-pub | grep -v '^NAME' | awk '{print $4}')"
@@ -297,17 +297,18 @@ function lab_scenario_2 () {
 
     validate_cluster_exists $RESOURCE_GROUP $CLUSTER_NAME
     
+    echo -e "\n\n--> Please wait while we prepar the lab environment for you...\n"
     az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
 
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx && \
-helm repo update && \
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx &>/dev/null
+helm repo update &>/dev/null
 helm install nginx-ingress ingress-nginx/ingress-nginx \
     --namespace ingress-basic --create-namespace \
     --set controller.replicaCount=1 \
     --set controller.nodeSelector."kubernetes\.io/os"=linux \
     --set controller.admissionWebhooks.patch.nodeSelector."kubernetes\.io/os"=linux \
     --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/ \
-    --set defaultBackend.nodeSelector."kubernetes\.io/os"=linux 
+    --set defaultBackend.nodeSelector."kubernetes\.io/os"=linux &>/dev/null
 
 kubectl create ns website &>/dev/null
 kubectl label ns website role=ingress-basic &>/dev/null
@@ -346,28 +347,18 @@ spec:
   - port: 80
   selector:
     app: aks-helloworld-one
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: hello-world-ingress
-  annotations:
-    nginx.ingress.kubernetes.io/use-regex: "true"
-spec:
-  ingressClassName: nginx
-  rules:
-  - http:
-      paths:
-      - path: /(.*)
-        pathType: Prefix
-        backend:
-          service:
-            name: aks-helloworld-one
-            port:
-              number: 80
 EOF
 
-cat <<EOF | kubectl -n website apply -f &>/dev/null -	
+cat <<EOF | kubectl -n website apply -f &>/dev/null -
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: default-deny-all
+  namespace: website
+spec:
+  podSelector: {}
+  ingress: []
+---
 kind: NetworkPolicy
 apiVersion: networking.k8s.io/v1
 metadata:
@@ -387,15 +378,30 @@ spec:
         matchLabels:
           app.kubernetes.io/component: controller
           app.kubernetes.io/instance: nginx-ingress
----	
-kind: NetworkPolicy
+EOF
+
+sleep 30
+
+cat <<EOF | kubectl -n website apply -f -
 apiVersion: networking.k8s.io/v1
+kind: Ingress
 metadata:
-  name: default-deny-all
+  name: hello-world-ingress
   namespace: website
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
 spec:
-  podSelector: {}
-  ingress: []
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: aks-helloworld-one
+            port:
+              number: 80
 EOF
 
     MC_RESOURCE_GROUP=$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query nodeResourceGroup -o tsv)
@@ -429,7 +435,7 @@ function lab_scenario_2_validation () {
             echo -e "\n\n========================================================"
             echo -e "\nThe website hosted on $WEB_IP is reachable\n"
         else
-            echo -e "\nScenario $LAB_SCENARIO is still FAILED\n"
+            echo -e "\nScenario $LAB_SCENARIO is still FAILED, the website hosted on $WEB_IP is not reachable\n"
         fi
     else
         echo -e "\n--> Error: Cluster $CLUSTER_NAME in resource group $RESOURCE_GROUP was not created with this tool for lab $LAB_SCENARIO and cannot be validated...\n"
