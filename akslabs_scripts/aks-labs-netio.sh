@@ -115,7 +115,7 @@ function print_usage_text () {
 *************************************************************************************
 *\t 1. Website hosted on AKS not reachable over public IP (NSG)
 *\t 2. Website hosted on AKS not reachable over public IP (netpol issue)
-*\t 3. WIP - Firewall issue (not ready yet)
+*\t 3. WIP - Outbound issue (not ready yet)
 *************************************************************************************\n"
 }
 

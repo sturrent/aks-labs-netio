@@ -20,7 +20,7 @@ Here is the list of current labs available:
 *************************************************************************************
 *        1. Website hosted on AKS not reachable over public IP (NSG)
 *        2. Website hosted on AKS not reachable over public IP (netpol issue)
-*        3. WIP - Firewall issue (not ready yet)
+*        3. WIP - Outbound issues (not ready yet)
 *************************************************************************************
 
 "-l|--lab" Lab scenario to deploy (3 possible options)
