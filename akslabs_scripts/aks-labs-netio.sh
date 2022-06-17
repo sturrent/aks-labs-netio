@@ -115,7 +115,7 @@ function print_usage_text () {
 *************************************************************************************
 *\t 1. Website hosted on AKS not reachable over public IP (NSG)
 *\t 2. Website hosted on AKS not reachable over public IP (netpol issue)
-*\t 3. WIP - Outbound issue (not ready yet)
+*\t 3. Not able to add new nodepool (outbound issue)
 *************************************************************************************\n"
 }
 
@@ -452,18 +452,48 @@ function lab_scenario_3 () {
     CLUSTER_NAME=aks-labs-netio-ex3-${USER_ALIAS}
     RESOURCE_GROUP=aks-labs-netio-ex3-rg-${USER_ALIAS}
     check_resourcegroup_cluster $RESOURCE_GROUP $CLUSTER_NAME
-    
+    VNET_NAME=aks-vnet-ex3
+    SUBNET_NAME=aks-subnet-ex3
+    NATGW=natgw1
+    NATGW_IP=natpubIP
+    NATGW_IP2=natpubIP2
+
     echo -e "\n--> Deploying cluster for lab${LAB_SCENARIO}...\n"
     
+    az network public-ip create -g $RESOURCE_GROUP -l $LOCATION_NAME -n $NATGW_IP --sku standard --allocation-method static -o table &>/dev/null
+    az network public-ip create -g $RESOURCE_GROUP -l $LOCATION_NAME -n $NATGW_IP2 --sku standard --allocation-method static -o table &>/dev/null
+    NATGW_IP_ADDR=$(az network public-ip show -n $NATGW_IP -g $RESOURCE_GROUP --query ipAddress -o tsv)
+    az network nat gateway create -g $RESOURCE_GROUP -n $NATGW --public-ip-addresses $NATGW_IP --idle-timeout 10 -o table &>/dev/null
+    az network vnet create -g $RESOURCE_GROUP -l $LOCATION_NAME --name $VNET_NAME --address-prefix 192.168.0.0/16 --subnet-name $SUBNET_NAME --subnet-prefix 192.168.100.0/24 -o table &>/dev/null
+    az network vnet subnet update --resource-group $RESOURCE_GROUP --vnet-name $VNET_NAME --name $SUBNET_NAME --nat-gateway $NATGW -o table &>/dev/null
+
+    SUBNET_ID=$(az network vnet subnet list \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VNET_NAME \
+    --query [].id --output tsv)
+
+    az aks create -n $CLUSTER_NAME -g $RESOURCE_GROUP -l $LOCATION_NAME \
+    --node-count 2 \
+    --network-plugin azure \
+    --vnet-subnet-id $SUBNET_ID \
+    --outbound-type userAssignedNATGateway \
+    --api-server-authorized-ip-ranges ${NATGW_IP_ADDR}/32 \
+    --generate-ssh-keys \
+    --yes -o table &>/dev/null
 
     validate_cluster_exists $RESOURCE_GROUP $CLUSTER_NAME
 
     echo -e "\n\n--> Please wait while we are preparing the environment for you to troubleshoot...\n"
-    az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
+    az network nat gateway update -g $RESOURCE_GROUP -n $NATGW --public-ip-addresses $NATGW_IP2 -o table &>/dev/null
+    az aks nodepool add \
+    --resource-group $RESOURCE_GROUP \
+    --cluster-name $CLUSTER_NAME \
+    --name nodepool2 \
+    --node-count 1
 
     CLUSTER_URI="$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query id -o tsv)"
     echo -e "\n\n********************************************************"
-    echo -e "\n--> Issue description: \n...firewall...\n"
+    echo -e "\n--> Issue description: \nFailed to add new nodepool to cluster\n"
     echo -e "\nCluster uri == ${CLUSTER_URI}\n"
 }
 
@@ -480,14 +510,11 @@ function lab_scenario_3_validation () {
         exit 6
     elif [ $LAB_TAG -eq $LAB_SCENARIO ]
     then
-        az aks get-credentials -g $RESOURCE_GROUP -n $CLUSTER_NAME --overwrite-existing &>/dev/null
-        CLUSTER_RESOURCE_GROUP=$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query nodeResourceGroup -o tsv)
-        PUBLIC_IP="$(kubectl get svc aks-helloworld-one | grep -v ^NAME | awk '{print $4}')"
-        SITE_STATUS="$(curl -IL -m 5 $PUBLIC_IP 2>/dev/null | grep ^HTTP | awk '{print $2}')"
-        if [ "$SITE_STATUS" == '200' ]
+        STATUS="$(az aks command invoke -g $RESOURCE_GROUP -n $CLUSTER_NAME --command "kubectl get no -o wide" -o tsv)"
+        if [[ ! -z "$STATUS" ]]
         then
             echo -e "\n\n========================================================"
-            echo -e "\nThe webservice looks good now\n"
+            echo -e "\nCluster looks good now\n"
         else
             echo -e "\nScenario $LAB_SCENARIO is still FAILED\n"
         fi
@@ -527,7 +554,7 @@ if [ -z $USER_ALIAS ]; then
 fi
 
 # lab scenario has a valid option
-if [[ ! $LAB_SCENARIO =~ ^[1-2]+$ ]];
+if [[ ! $LAB_SCENARIO =~ ^[1-3]+$ ]];
 then
     echo -e "\n--> Error: invalid value for lab scenario '-l $LAB_SCENARIO'\nIt must be value from 1 to 2\n"
     exit 11
