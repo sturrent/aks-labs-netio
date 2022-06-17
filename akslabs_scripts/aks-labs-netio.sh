@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # script name: aks-labs-netio.sh
-# Version v0.0.4 20220530
+# Version v0.0.5 20220617
 # Set of tools to deploy AKS troubleshooting labs
 
 # "-l|--lab" Lab scenario to deploy
@@ -58,7 +58,7 @@ done
 # Variable definition
 SCRIPT_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
 SCRIPT_NAME="$(echo $0 | sed 's|\.\/||g')"
-SCRIPT_VERSION="Version v0.0.4 20220530"
+SCRIPT_VERSION="Version v0.0.5 20220617"
 
 # Funtion definition
 
@@ -459,12 +459,12 @@ function lab_scenario_3 () {
     NATGW_IP2=natpubIP2
 
     echo -e "\n--> Deploying cluster for lab${LAB_SCENARIO}...\n"
-    
-    az network public-ip create -g $RESOURCE_GROUP -l $LOCATION_NAME -n $NATGW_IP --sku standard --allocation-method static -o table &>/dev/null
-    az network public-ip create -g $RESOURCE_GROUP -l $LOCATION_NAME -n $NATGW_IP2 --sku standard --allocation-method static -o table &>/dev/null
+    while true; do for s in / - \\ \|; do printf "\r$s"; sleep 1; done; done & # spinner
+    az network public-ip create -g $RESOURCE_GROUP -l $LOCATION -n $NATGW_IP --sku standard --allocation-method static -o table &>/dev/null
+    az network public-ip create -g $RESOURCE_GROUP -l $LOCATION -n $NATGW_IP2 --sku standard --allocation-method static -o table &>/dev/null
     NATGW_IP_ADDR=$(az network public-ip show -n $NATGW_IP -g $RESOURCE_GROUP --query ipAddress -o tsv)
     az network nat gateway create -g $RESOURCE_GROUP -n $NATGW --public-ip-addresses $NATGW_IP --idle-timeout 10 -o table &>/dev/null
-    az network vnet create -g $RESOURCE_GROUP -l $LOCATION_NAME --name $VNET_NAME --address-prefix 192.168.0.0/16 --subnet-name $SUBNET_NAME --subnet-prefix 192.168.100.0/24 -o table &>/dev/null
+    az network vnet create -g $RESOURCE_GROUP -l $LOCATION --name $VNET_NAME --address-prefix 192.168.0.0/16 --subnet-name $SUBNET_NAME --subnet-prefix 192.168.100.0/24 -o table &>/dev/null
     az network vnet subnet update --resource-group $RESOURCE_GROUP --vnet-name $VNET_NAME --name $SUBNET_NAME --nat-gateway $NATGW -o table &>/dev/null
 
     SUBNET_ID=$(az network vnet subnet list \
@@ -472,24 +472,28 @@ function lab_scenario_3 () {
     --vnet-name $VNET_NAME \
     --query [].id --output tsv)
 
-    az aks create -n $CLUSTER_NAME -g $RESOURCE_GROUP -l $LOCATION_NAME \
+    az aks create -n $CLUSTER_NAME -g $RESOURCE_GROUP -l $LOCATION \
     --node-count 2 \
     --network-plugin azure \
     --vnet-subnet-id $SUBNET_ID \
     --outbound-type userAssignedNATGateway \
     --api-server-authorized-ip-ranges ${NATGW_IP_ADDR}/32 \
     --generate-ssh-keys \
+    --tag aks-net-lab=${LAB_SCENARIO} \
     --yes -o table &>/dev/null
 
     validate_cluster_exists $RESOURCE_GROUP $CLUSTER_NAME
+    kill $!; trap 'kill $!' SIGTERM # kill the spinner
 
     echo -e "\n\n--> Please wait while we are preparing the environment for you to troubleshoot...\n"
+    while true; do for s in / - \\ \|; do printf "\r$s"; sleep 1; done; done & # spinner
     az network nat gateway update -g $RESOURCE_GROUP -n $NATGW --public-ip-addresses $NATGW_IP2 -o table &>/dev/null
     az aks nodepool add \
     --resource-group $RESOURCE_GROUP \
     --cluster-name $CLUSTER_NAME \
     --name nodepool2 \
-    --node-count 1
+    --node-count 1 -o table &>/dev/null
+    kill $!; trap 'kill $!' SIGTERM # kill the spinner
 
     CLUSTER_URI="$(az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME --query id -o tsv)"
     echo -e "\n\n********************************************************"
