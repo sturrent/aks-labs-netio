@@ -146,8 +146,8 @@ function lab_scenario_1 () {
 
     az network nsg rule create -g $RESOURCE_GROUP --nsg-name $NSG_NAME \
     -n SecRule1  --priority 200 \
-    --source-address-prefixes Internet \
-    --destination-address-prefixes '*' \
+    --source-address-prefixes VirtualNetwork \
+    --destination-address-prefixes Internet \
     --destination-port-ranges '*' \
     --direction Inbound \
     --access Deny \
